@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>📁 FILE MANAGER ULTIMATE</title>
+    <style>
+        :root {
+            --bg: #000000; --panel: #1c1c1e; --accent: #0a84ff;
+            --success: #32d74b; --text: #ffffff; --border: #38383a;
+            --share: #bf5af2;
+        }
+        body {
+            margin: 0; background: var(--bg); color: var(--text);
+            font-family: -apple-system, sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+        }
+        header {
+            padding: 20px; background: #111; border-bottom: 1px solid var(--border);
+            padding-top: calc(20px + env(safe-area-inset-top));
+        }
+        .info-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        h1 { font-size: 1rem; margin: 0; color: var(--accent); letter-spacing: 1px; }
+        #status-msg { font-size: 0.8rem; font-weight: bold; }
+        
+        .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+        button {
+            flex: 1; padding: 12px; border: none; border-radius: 10px;
+            font-weight: bold; font-size: 0.9rem; cursor: pointer; color: white;
+            transition: transform 0.1s;
+        }
+        button:active { transform: scale(0.95); }
+        .btn-save { background: var(--success); }
+        .btn-search { background: var(--accent); }
+        .btn-share { background: var(--share); }
+
+        main { display: flex; flex-grow: 1; flex-direction: column; padding: 15px; gap: 12px; }
+        .input-box { background: var(--panel); padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
+        input { width: 100%; background: transparent; border: none; color: #fff; font-size: 1.1rem; outline: none; }
+        textarea {
+            flex: 1; background: var(--panel); color: #efefef; border: 1px solid var(--border);
+            border-radius: 12px; padding: 15px; font-family: 'Menlo', monospace; font-size: 1rem; resize: none; outline: none; line-height: 1.6;
+        }
+
+        #undo-banner {
+            position: fixed; bottom: -100px; left: 20px; right: 20px;
+            background: #333; padding: 15px; border-radius: 15px;
+            display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8); z-index: 9999; transition: bottom 0.4s;
+        }
+        #undo-banner.show { bottom: 30px; }
+        .undo-btn { background: var(--accent); padding: 8px 16px; border-radius: 8px; font-size: 0.9rem; width: auto; flex: none; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="info-row">
+            <h1>📁 FILE MANAGER</h1>
+            <div id="status-msg" style="color:#888;">READY</div>
+        </div>
+        <div class="toolbar">
+            <button class="btn-save" onclick="handleSave()">💾 保存＆クリア</button>
+            <button class="btn-search" onclick="handleSearch()">🔍 検索</button>
+            <button class="btn-share" onclick="handleShare()">🔗 共有URL作成</button>
+        </div>
+    </header>
+
+    <main>
+        <div class="input-box"><input type="text" id="filename" placeholder="ファイル名を入力..." spellcheck="false"></div>
+        <textarea id="content" placeholder="内容を入力..." spellcheck="false"></textarea>
+    </main>
+
+    <div id="undo-banner">
+        <span>保存完了！ <b id="timer">5</b>s</span>
+        <button class="undo-btn" onclick="undoAction()">↩️ 戻す</button>
+    </div>
+
+    <script>
+        const nameIn = document.getElementById('filename');
+        const bodyIn = document.getElementById('content');
+        const status = document.getElementById('status-msg');
+        let backup = { n: '', b: '' };
+        let undoT = null;
+
+        // --- 1. 裏方担当 (sw.js) の登録 ---
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js')
+                .then(() => console.log('Service Worker Registered'))
+                .catch(err => console.log('SW Registration Failed', err));
+        }
+
+        // --- 2. URLからのインポート ＆ 起動時復元 ---
+        window.onload = () => {
+            const params = new URLSearchParams(window.location.search);
+            const shareData = params.get('share');
+
+            if (shareData) {
+                try {
+                    const decoded = JSON.parse(decodeURIComponent(atob(shareData)));
+                    nameIn.value = decoded.n;
+                    bodyIn.value = decoded.b;
+                    localStorage.setItem('DB_FILE_' + decoded.n, decoded.b);
+                    status.innerText = "✅ インポート完了";
+                    status.style.color = "#32d74b";
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } catch (e) { status.innerText = "❌ URLエラー"; }
+            } else {
+                nameIn.value = localStorage.getItem('DRAFT_N') || '';
+                bodyIn.value = localStorage.getItem('DRAFT_B') || '';
+            }
+        };
+
+        function auto() {
+            localStorage.setItem('DRAFT_N', nameIn.value);
+            localStorage.setItem('DRAFT_B', bodyIn.value);
+        }
+        nameIn.addEventListener('input', auto);
+        bodyIn.addEventListener('input', auto);
+
+        // --- 3. 基本機能 (保存・検索・戻す) ---
+        function handleSave() {
+            const n = nameIn.value.trim();
+            const b = bodyIn.value;
+            if (!n) return alert("名前を入れて！");
+            localStorage.setItem('DB_FILE_' + n, b);
+            backup = { n, b };
+            nameIn.value = ""; bodyIn.value = ""; auto();
+            showUndo();
+            status.innerText = "✅ 保存済み";
+        }
+
+        function handleSearch() {
+            const n = nameIn.value.trim();
+            const found = localStorage.getItem('DB_FILE_' + n);
+            if (found !== null) {
+                bodyIn.value = found; auto();
+                status.innerText = "🔍 読込完了";
+            } else { alert("見つかりません"); }
+        }
+
+        function showUndo() {
+            const banner = document.getElementById('undo-banner');
+            const timer = document.getElementById('timer');
+            let left = 5;
+            banner.classList.add('show');
+            timer.innerText = left;
+            clearInterval(undoT);
+            undoT = setInterval(() => {
+                left--; timer.innerText = left;
+                if (left <= 0) { banner.classList.remove('show'); clearInterval(undoT); }
+            }, 1000);
+        }
+
+        function undoAction() {
+            nameIn.value = backup.n; bodyIn.value = backup.b; auto();
+            document.getElementById('undo-banner').classList.remove('show');
+            clearInterval(undoT);
+        }
+
+        // --- 4. 共有URL作成 ---
+        function handleShare() {
+            const n = nameIn.value.trim();
+            const b = bodyIn.value;
+            if (!n || !b) return alert("中身がないよ！");
+            const data = JSON.stringify({ n, b });
+            const encoded = btoa(encodeURIComponent(data));
+            const url = window.location.origin + window.location.pathname + "?share=" + encoded;
+            navigator.clipboard.writeText(url).then(() => {
+                alert("共有URLをコピーしました！");
+            });
+        }
+    </script>
+</body>
+</html>
