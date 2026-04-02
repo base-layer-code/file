@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>📁 FILE MANAGER V3</title>
+    <title>📁 FILE MANAGER V4</title>
     <style>
         :root {
             --bg: #000; --panel: #1c1c1e; --accent: #0a84ff;
-            --success: #32d74b; --text: #fff; --border: #38383a;
+            --success: #32d74b; --text: #fff; --border: #38383a; --bulk: #ff9500;
         }
         body {
             margin: 0; background: var(--bg); color: var(--text);
@@ -20,24 +20,25 @@
             padding-top: calc(20px + env(safe-area-inset-top));
         }
         .info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        h1 { font-size: 0.9rem; margin: 0; color: var(--accent); }
-        #status { font-size: 0.75rem; font-weight: bold; padding: 2px 8px; border-radius: 5px; background: #333; }
+        h1 { font-size: 0.85rem; margin: 0; color: var(--accent); }
+        #status { font-size: 0.7rem; font-weight: bold; padding: 2px 8px; border-radius: 5px; background: #333; }
 
-        .toolbar { display: flex; gap: 8px; }
+        .toolbar { display: flex; gap: 5px; flex-wrap: wrap; }
         button {
-            flex: 1; padding: 12px; border: none; border-radius: 10px;
-            font-weight: bold; cursor: pointer; color: white; font-size: 0.85rem;
+            flex: 1; min-width: 75px; padding: 10px; border: none; border-radius: 8px;
+            font-weight: bold; cursor: pointer; color: white; font-size: 0.75rem;
         }
         .btn-save { background: var(--success); }
         .btn-search { background: var(--accent); }
-        .btn-share { background: #bf5af2; }
+        .btn-share-one { background: #bf5af2; }
+        .btn-share-all { background: var(--bulk); } /* オレンジ色：一括共有 */
 
-        main { display: flex; flex-grow: 1; flex-direction: column; padding: 15px; gap: 10px; }
+        main { display: flex; flex-grow: 1; flex-direction: column; padding: 10px; gap: 8px; }
         .input-box { background: var(--panel); padding: 10px; border-radius: 10px; border: 1px solid var(--border); }
-        input { width: 100%; background: transparent; border: none; color: #fff; font-size: 1.1rem; outline: none; }
+        input { width: 100%; background: transparent; border: none; color: #fff; font-size: 1rem; outline: none; }
         textarea {
             flex: 1; background: var(--panel); color: #efefef; border: 1px solid var(--border);
-            border-radius: 10px; padding: 15px; font-family: 'Menlo', monospace; font-size: 1rem; resize: none; outline: none;
+            border-radius: 10px; padding: 15px; font-family: 'Menlo', monospace; font-size: 0.9rem; resize: none; outline: none;
         }
 
         #undo-banner {
@@ -53,13 +54,14 @@
 
 <header>
     <div class="info">
-        <h1>📁 FILE MANAGER V3</h1>
+        <h1>📁 FILE MANAGER V4</h1>
         <div id="status">READY</div>
     </div>
     <div class="toolbar">
         <button class="btn-save" onclick="handleSave()">💾 保存</button>
         <button class="btn-search" onclick="handleSearch()">🔍 検索</button>
-        <button class="btn-share" onclick="handleShare()">🔗 共有URL</button>
+        <button class="btn-share-one" onclick="handleShareOne()">🔗 単体共有</button>
+        <button class="btn-share-all" onclick="handleShareAll()">🚀 全件同期</button>
     </div>
 </header>
 
@@ -70,7 +72,7 @@
 
 <div id="undo-banner">
     <span>保存しました <b id="timer">5</b>s</span>
-    <button style="background:var(--accent); width:auto;" onclick="undoAction()">↩️ 戻す</button>
+    <button style="background:var(--accent); border-radius:5px; padding:5px 10px;" onclick="undoAction()">↩️ 戻す</button>
 </div>
 
 <script>
@@ -80,34 +82,39 @@
     let backup = { n: '', b: '' };
     let undoT = null;
 
-    // --- 1. 裏方担当(sw.js)登録 ---
+    [span_0](start_span)// --- 1. 裏方担当登録[span_0](end_span) ---
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('sw.js').catch(e => console.error(e));
     }
 
-    // --- 2. 共有URL解析 (日本語に強い方式) ---
+    // --- 2. 共有データのインポート (単体 / 全件) ---
     window.onload = () => {
         const params = new URLSearchParams(window.location.search);
-        const shareData = params.get('share');
+        
+        // 【全件同期】の読み込み
+        const allData = params.get('all');
+        if (allData) {
+            try {
+                const files = JSON.parse(decodeURIComponent(escape(atob(allData))));
+                files.forEach(f => {
+                    localStorage.setItem('DB_FILE_' + f.n, f.b);
+                });
+                updateStatus("🚀 全件同期完了 (" + files.length + "件)", "#ff9500");
+                window.history.replaceState({}, document.title, window.location.pathname);
+                return;
+            } catch (e) { console.error(e); }
+        }
 
+        // 【単体共有】の読み込み
+        const shareData = params.get('share');
         if (shareData) {
             try {
-                // 安全にデコードする新ロジック
-                const decodedData = decodeURIComponent(escape(atob(shareData)));
-                const obj = JSON.parse(decodedData);
-                
-                if (obj.n && obj.b) {
-                    nameIn.value = obj.n;
-                    bodyIn.value = obj.b;
-                    localStorage.setItem('DB_FILE_' + obj.n, obj.b);
-                    updateStatus("📥 共有成功！", "#32d74b");
-                    // URLをきれいにする
-                    window.history.replaceState({}, document.title, window.location.pathname);
-                }
-            } catch (e) {
-                updateStatus("❌ エラー: " + e.message, "#ff453a");
-                console.error(e);
-            }
+                const obj = JSON.parse(decodeURIComponent(escape(atob(shareData))));
+                nameIn.value = obj.n; bodyIn.value = obj.b;
+                localStorage.setItem('DB_FILE_' + obj.n, obj.b);
+                updateStatus("📥 インポート完了", "#32d74b");
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } catch (e) { updateStatus("❌ エラー", "#ff453a"); }
         } else {
             nameIn.value = localStorage.getItem('DRAFT_N') || '';
             bodyIn.value = localStorage.getItem('DRAFT_B') || '';
@@ -115,8 +122,7 @@
     };
 
     function updateStatus(txt, color) {
-        status.innerText = txt;
-        status.style.color = color || "#888";
+        status.innerText = txt; status.style.color = color || "#888";
     }
 
     function auto() {
@@ -126,6 +132,7 @@
     nameIn.addEventListener('input', auto);
     bodyIn.addEventListener('input', auto);
 
+    // 保存・検索
     function handleSave() {
         const n = nameIn.value.trim();
         const b = bodyIn.value;
@@ -143,38 +150,51 @@
         if (found !== null) {
             bodyIn.value = found; auto();
             updateStatus("🔍 読込成功", "#0a84ff");
-        } else {
-            alert("「" + n + "」はないよ");
-        }
+        } else { alert("見つかりません"); }
     }
 
-    // --- 3. 共有URL作成 (日本語に強い方式) ---
-    function handleShare() {
+    // --- 3. 共有機能の進化 ---
+
+    // 【単体共有】今見ているファイル1つだけ
+    function handleShareOne() {
         const n = nameIn.value.trim();
         const b = bodyIn.value;
         if (!n || !b) return alert("空っぽだよ");
-        
-        try {
-            const data = JSON.stringify({ n, b });
-            // 日本語を壊さないエンコード
-            const encoded = btoa(unescape(encodeURIComponent(data)));
-            const url = window.location.origin + window.location.pathname + "?share=" + encoded;
-            
-            navigator.clipboard.writeText(url).then(() => {
-                alert("URLをコピーしたよ！");
-                updateStatus("🔗 URLコピー済", "#bf5af2");
-            });
-        } catch (e) {
-            alert("共有に失敗: " + e.message);
+        const encoded = btoa(unescape(encodeURIComponent(JSON.stringify({ n, b }))));
+        const url = window.location.origin + window.location.pathname + "?share=" + encoded;
+        copy(url, "単体共有URLをコピーしたよ！");
+    }
+
+    // 【全件同期】保存されている全てのファイルを1つのURLに！
+    function handleShareAll() {
+        const files = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key.startsWith('DB_FILE_')) {
+                files.push({ n: key.replace('DB_FILE_', ''), b: localStorage.getItem(key) });
+            }
         }
+        if (files.length === 0) return alert("保存されたファイルがありません");
+        
+        const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(files))));
+        const url = window.location.origin + window.location.pathname + "?all=" + encoded;
+        copy(url, "🚀 全件同期URL（" + files.length + "件分）をコピーしたよ！");
+    }
+
+    function copy(url, msg) {
+        navigator.clipboard.writeText(url).then(() => {
+            alert(msg);
+            updateStatus("🔗 URLコピー済", "#bf5af2");
+        }).catch(() => {
+            // iOS等で稀に失敗する場合の代替
+            prompt("URLをコピーしてください:", url);
+        });
     }
 
     function showUndo() {
         const banner = document.getElementById('undo-banner');
         const timer = document.getElementById('timer');
-        let left = 5;
-        banner.classList.add('show');
-        timer.innerText = left;
+        let left = 5; banner.classList.add('show'); timer.innerText = left;
         clearInterval(undoT);
         undoT = setInterval(() => {
             left--; timer.innerText = left;
